@@ -2,14 +2,13 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <iosfwd>
-#include <map>
 #include <optional>
 #include <vector>
 
 #include "lob/object_pool.hpp"
 #include "lob/order_index.hpp"
+#include "lob/price_ladder.hpp"
 #include "lob/types.hpp"
 
 namespace lob {
@@ -20,7 +19,7 @@ enum class Status : std::uint8_t {
   Ok,
   DuplicateId,      // an order with this id is already in the book
   InvalidQuantity,  // quantity was 0
-  InvalidPrice,     // price was 0 or negative
+  InvalidPrice,     // price outside the book's price band (or <= 0)
   UnknownId,        // cancel of an id that is not in the book
 };
 
@@ -33,6 +32,18 @@ struct LevelInfo {
   bool operator==(const LevelInfo&) const = default;
 };
 
+// Sizes fixed when the book is created.
+struct BookConfig {
+  // How many orders are usually resting at once. Memory for that many is
+  // reserved up front; more still works, just slower.
+  std::size_t expected_orders = 1 << 16;
+  // The price band: limit orders must be priced inside [min, max] ticks.
+  // Every price in the band gets a slot in an array, so the band costs
+  // memory: about 40 bytes per tick per side (~21 MB for the default).
+  Price min_price = 1;
+  Price max_price = (1 << 18) - 1;
+};
+
 // ---------------------------------------------------------------------------
 // The limit order book and matching engine.
 //
@@ -43,9 +54,12 @@ struct LevelInfo {
 // ---------------------------------------------------------------------------
 class OrderBook {
  public:
-  // `expected_orders`: how many orders are usually resting at once. Memory
-  // for that many is reserved up front; more still works, just slower.
-  explicit OrderBook(std::size_t expected_orders = 1 << 16);
+  explicit OrderBook(const BookConfig& cfg = {});
+
+  // Orders and levels point at each other, so a copy would point into the
+  // ORIGINAL book. Forbid copying (and moving) to rule that bug out.
+  OrderBook(const OrderBook&) = delete;
+  OrderBook& operator=(const OrderBook&) = delete;
 
   // Limit order: "buy/sell up to qty at price or better".
   Status add(OrderId id, Side side, Price price, Quantity qty);
@@ -67,6 +81,8 @@ class OrderBook {
   const Order* find(OrderId id) const;  // nullptr if not in the book
   std::size_t order_count() const { return orders_.size(); }
   std::size_t level_count(Side side) const;
+  Price min_price() const { return min_price_; }
+  Price max_price() const { return max_price_; }
 
   // Receipt book: every trade since the last clear_trades(), oldest first.
   const std::vector<Trade>& trades() const { return trades_; }
@@ -81,9 +97,9 @@ class OrderBook {
 
   // The matching loop, written once for both sides. `book_side` is the
   // OPPOSITE side of the incoming order (a buyer trades against asks).
-  template <typename Map>
-  Quantity match_against(Map& book_side, OrderId id, Side side, Price limit,
-                         Quantity qty);
+  template <typename Ladder>
+  Quantity match_against(Ladder& book_side, OrderId id, Side side,
+                         Price limit, Quantity qty);
 
   // Remove a finished order from the id index and return its memory.
   void forget(Order* o);
@@ -91,13 +107,9 @@ class OrderBook {
   // Put a (remaining) limit order into its price level queue.
   void rest(OrderId id, Side side, Price price, Quantity qty);
 
-  // Bids: highest price first, so begin() is the best bid.
-  // Asks: lowest price first, so begin() is the best ask.
-  using BidMap = std::map<Price, PriceLevel, std::greater<>>;
-  using AskMap = std::map<Price, PriceLevel, std::less<>>;
-
-  BidMap bids_;
-  AskMap asks_;
+  Price min_price_, max_price_;
+  PriceLadder<Side::Buy> bids_;   // best = highest price
+  PriceLadder<Side::Sell> asks_;  // best = lowest price
 
   // Every resting order lives in the pool; the index finds it by id in O(1).
   ObjectPool<Order> pool_;

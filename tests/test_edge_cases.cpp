@@ -35,13 +35,39 @@ TEST(EdgeCases, HugeQuantitiesDoNotOverflowTheLevelTotal) {
   EXPECT_EQ(book.volume_at(Side::Sell, 10100), std::uint64_t{kMaxQty});
 }
 
-TEST(EdgeCases, BuyAtHighestPossiblePriceSweepsEverything) {
+TEST(EdgeCases, PricesOutsideTheBandAreRejected) {
+  OrderBook book;  // default band: [1, max_price()]
+  EXPECT_EQ(book.add(1, Side::Sell, book.max_price() + 1, 5),
+            Status::InvalidPrice);
+  EXPECT_EQ(book.add(2, Side::Buy, kMaxPrice, 5), Status::InvalidPrice);
+  EXPECT_EQ(book.add(3, Side::Buy, book.min_price() - 1, 5),
+            Status::InvalidPrice);
+  EXPECT_EQ(book.order_count(), 0u);
+}
+
+TEST(EdgeCases, BothEndsOfTheBandWork) {
   OrderBook book;
   book.add(1, Side::Sell, 10100, 5);
-  book.add(2, Side::Sell, 99999999, 5);
-  book.add(3, Side::Buy, kMaxPrice, 10);  // no overflow in the price checks
+  book.add(2, Side::Sell, book.max_price(), 5);  // highest allowed price
+  book.add(3, Side::Buy, book.min_price(), 5);   // lowest allowed price
+  EXPECT_EQ(book.best_bid(), book.min_price());
+
+  book.add(4, Side::Buy, book.max_price(), 10);  // sweeps both asks
   EXPECT_EQ(book.trades().size(), 2u);
-  EXPECT_EQ(book.order_count(), 0u);
+  EXPECT_FALSE(book.best_ask().has_value());
+}
+
+TEST(EdgeCases, CustomPriceBand) {
+  BookConfig cfg;
+  cfg.min_price = 50'000;
+  cfg.max_price = 50'099;  // a band of only 100 ticks
+  OrderBook book(cfg);
+  EXPECT_EQ(book.add(1, Side::Buy, 49'999, 1), Status::InvalidPrice);
+  EXPECT_EQ(book.add(2, Side::Buy, 50'000, 1), Status::Ok);
+  EXPECT_EQ(book.add(3, Side::Sell, 50'099, 1), Status::Ok);
+  EXPECT_EQ(book.add(4, Side::Sell, 50'100, 1), Status::InvalidPrice);
+  EXPECT_EQ(book.market(5, Side::Buy, 1), Status::Ok);  // markets have no price
+  EXPECT_EQ(book.trades().size(), 1u);
 }
 
 // --- Big books --------------------------------------------------------------

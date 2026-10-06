@@ -8,33 +8,21 @@ namespace lob {
 
 namespace {
 
-// Find the level for `price`, creating an empty one if it does not exist.
-// A template, because bids and asks are different map types.
-template <typename Map>
-PriceLevel& level_for(Map& side, Price price) {
-  auto [it, inserted] = side.try_emplace(price);
-  if (inserted) {
-    it->second.price = price;
-  }
-  return it->second;
-}
-
-template <typename Map>
-std::vector<LevelInfo> depth_of(const Map& side, std::size_t max_levels) {
+// Walk one side from best to worst level and copy out up to max_levels.
+template <typename Ladder>
+std::vector<LevelInfo> depth_of(const Ladder& side, std::size_t max_levels) {
   std::vector<LevelInfo> out;
-  for (const auto& [price, lvl] : side) {
-    if (out.size() == max_levels) {
-      break;
-    }
-    out.push_back({price, lvl.total_qty, lvl.count});
+  for (const PriceLevel* lvl = side.best();
+       lvl != nullptr && out.size() < max_levels; lvl = side.next_worse(*lvl)) {
+    out.push_back({lvl->price, lvl->total_qty, lvl->count});
   }
   return out;
 }
 
-template <typename Map>
-std::uint64_t volume_in(const Map& side, Price price) {
-  auto it = side.find(price);
-  return it == side.end() ? 0 : it->second.total_qty;
+template <typename Ladder>
+std::uint64_t volume_in(const Ladder& side, Price price) {
+  const PriceLevel* lvl = side.find(price);
+  return lvl == nullptr ? 0 : lvl->total_qty;
 }
 
 // Does a resting order at `level_price` cross an incoming order on `side`
@@ -46,16 +34,24 @@ bool crosses(Side side, Price limit, Price level_price) {
 
 }  // namespace
 
-OrderBook::OrderBook(std::size_t expected_orders)
-    : pool_(expected_orders), orders_(expected_orders) {}
+OrderBook::OrderBook(const BookConfig& cfg)
+    : min_price_(cfg.min_price),
+      max_price_(cfg.max_price),
+      bids_(cfg.min_price, cfg.max_price),
+      asks_(cfg.min_price, cfg.max_price),
+      pool_(cfg.expected_orders),
+      orders_(cfg.expected_orders) {}
 
-template <typename Map>
-Quantity OrderBook::match_against(Map& book_side, OrderId id, Side side,
+template <typename Ladder>
+Quantity OrderBook::match_against(Ladder& book_side, OrderId id, Side side,
                                   Price limit, Quantity qty) {
   // Outer loop: best price level first.
-  while (qty > 0 && !book_side.empty()) {
-    auto level_it = book_side.begin();
-    PriceLevel& lvl = level_it->second;
+  while (qty > 0) {
+    PriceLevel* best = book_side.best();
+    if (best == nullptr) {
+      break;  // nothing left on the other side
+    }
+    PriceLevel& lvl = *best;
     if (!crosses(side, limit, lvl.price)) {
       break;  // best remaining price is too expensive: stop
     }
@@ -82,7 +78,7 @@ Quantity OrderBook::match_against(Map& book_side, OrderId id, Side side,
     }
 
     if (lvl.empty()) {
-      book_side.erase(level_it);  // no one left at this price
+      book_side.remove_level(lvl);  // no one left at this price
     }
   }
   return qty;
@@ -97,8 +93,8 @@ Status OrderBook::add(OrderId id, Side side, Price price, Quantity qty) {
   if (qty == 0) {
     return Status::InvalidQuantity;
   }
-  if (price <= 0) {
-    return Status::InvalidPrice;
+  if (price < min_price_ || price > max_price_) {
+    return Status::InvalidPrice;  // outside the price band (includes <= 0)
   }
   if (orders_.contains(id)) {
     return Status::DuplicateId;
@@ -140,9 +136,9 @@ void OrderBook::rest(OrderId id, Side side, Price price, Quantity qty) {
   o.qty = qty;
 
   if (side == Side::Buy) {
-    level_for(bids_, price).push_back(&o);
+    bids_.level_for(price).push_back(&o);
   } else {
-    level_for(asks_, price).push_back(&o);
+    asks_.level_for(price).push_back(&o);
   }
 }
 
@@ -160,9 +156,9 @@ Status OrderBook::cancel(OrderId id) {
   // price where nothing is waiting.
   if (lvl->empty()) {
     if (o.side == Side::Buy) {
-      bids_.erase(o.price);
+      bids_.remove_level(*lvl);
     } else {
-      asks_.erase(o.price);
+      asks_.remove_level(*lvl);
     }
   }
 
@@ -172,17 +168,19 @@ Status OrderBook::cancel(OrderId id) {
 }
 
 std::optional<Price> OrderBook::best_bid() const {
-  if (bids_.empty()) {
+  const PriceLevel* lvl = bids_.best();
+  if (lvl == nullptr) {
     return std::nullopt;
   }
-  return bids_.begin()->first;
+  return lvl->price;
 }
 
 std::optional<Price> OrderBook::best_ask() const {
-  if (asks_.empty()) {
+  const PriceLevel* lvl = asks_.best();
+  if (lvl == nullptr) {
     return std::nullopt;
   }
-  return asks_.begin()->first;
+  return lvl->price;
 }
 
 std::uint64_t OrderBook::volume_at(Side side, Price price) const {
@@ -206,12 +204,18 @@ std::size_t OrderBook::level_count(Side side) const {
 // Prints the book like a trading screen: asks on top (highest first),
 // then the spread line, then bids (highest first).
 std::ostream& operator<<(std::ostream& os, const OrderBook& book) {
-  for (auto it = book.asks_.rbegin(); it != book.asks_.rend(); ++it) {
-    os << "  ASK " << it->second << '\n';
+  std::vector<const PriceLevel*> asks;  // collected best-first...
+  for (const PriceLevel* l = book.asks_.best(); l != nullptr;
+       l = book.asks_.next_worse(*l)) {
+    asks.push_back(l);
+  }
+  for (auto it = asks.rbegin(); it != asks.rend(); ++it) {  // ...printed reversed
+    os << "  ASK " << **it << '\n';
   }
   os << "  ------------------------------------\n";
-  for (const auto& [price, lvl] : book.bids_) {
-    os << "  BID " << lvl << '\n';
+  for (const PriceLevel* l = book.bids_.best(); l != nullptr;
+       l = book.bids_.next_worse(*l)) {
+    os << "  BID " << *l << '\n';
   }
   return os;
 }

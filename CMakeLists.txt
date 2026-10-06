@@ -77,6 +77,7 @@ add_executable(lob_tests
   tests/test_bench_tools.cpp
   tests/test_object_pool.cpp
   tests/test_order_index.cpp
+  tests/test_price_ladder.cpp
 )
 # The benchmark tools in bench/ are tested too.
 target_include_directories(lob_tests PRIVATE bench)
