@@ -74,7 +74,10 @@ add_executable(lob_tests
   tests/test_matching.cpp
   tests/test_edge_cases.cpp
   tests/test_differential.cpp
+  tests/test_bench_tools.cpp
 )
+# The benchmark tools in bench/ are tested too.
+target_include_directories(lob_tests PRIVATE bench)
 target_link_libraries(lob_tests PRIVATE lob GTest::gtest_main)
 include(GoogleTest)
 gtest_discover_tests(lob_tests)
@@ -89,3 +92,7 @@ target_link_libraries(lob_bench PRIVATE lob benchmark::benchmark_main)
 # --- Demo program ------------------------------------------------------------
 add_executable(lob_demo apps/demo.cpp)
 target_link_libraries(lob_demo PRIVATE lob)
+
+# --- Latency benchmark (Layer 6) ----------------------------------------------
+add_executable(lob_latency bench/latency_main.cpp)
+target_link_libraries(lob_latency PRIVATE lob)
