@@ -7,15 +7,6 @@
 
 using namespace lob;
 
-// Lets GoogleTest compare and print trades in failure messages.
-namespace lob {
-bool operator==(const Trade& a, const Trade& b) {
-  return a.buy_id == b.buy_id && a.sell_id == b.sell_id &&
-         a.price == b.price && a.qty == b.qty;
-}
-void PrintTo(const Trade& t, std::ostream* os) { *os << t; }
-}  // namespace lob
-
 using Trades = std::vector<Trade>;
 
 // --- Limit orders that do NOT cross -----------------------------------------

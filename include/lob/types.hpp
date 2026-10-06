@@ -103,6 +103,9 @@ struct Trade {
   OrderId sell_id{};
   Price price{};
   Quantity qty{};
+
+  // Two trades are equal if every field is equal (the compiler writes it).
+  bool operator==(const Trade&) const = default;
 };
 
 // Printing, for debugging and tests. Defined in types.cpp so the heavy

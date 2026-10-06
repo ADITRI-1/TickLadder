@@ -72,6 +72,8 @@ add_executable(lob_tests
   tests/test_types.cpp
   tests/test_order_book.cpp
   tests/test_matching.cpp
+  tests/test_edge_cases.cpp
+  tests/test_differential.cpp
 )
 target_link_libraries(lob_tests PRIVATE lob GTest::gtest_main)
 include(GoogleTest)
