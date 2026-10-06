@@ -60,6 +60,7 @@ FetchContent_MakeAvailable(googletest benchmark)
 # they exercise exactly the same compiled code.
 add_library(lob
   src/types.cpp
+  src/order_book.cpp
 )
 target_include_directories(lob PUBLIC include)
 target_link_libraries(lob PUBLIC lob_options)
@@ -69,6 +70,7 @@ enable_testing()
 add_executable(lob_tests
   tests/test_sanity.cpp
   tests/test_types.cpp
+  tests/test_order_book.cpp
 )
 target_link_libraries(lob_tests PRIVATE lob GTest::gtest_main)
 include(GoogleTest)
@@ -77,5 +79,10 @@ gtest_discover_tests(lob_tests)
 # --- Benchmarks --------------------------------------------------------------
 add_executable(lob_bench
   bench/bench_sanity.cpp
+  bench/bench_order_book.cpp
 )
 target_link_libraries(lob_bench PRIVATE lob benchmark::benchmark_main)
+
+# --- Demo program ------------------------------------------------------------
+add_executable(lob_demo apps/demo.cpp)
+target_link_libraries(lob_demo PRIVATE lob)
