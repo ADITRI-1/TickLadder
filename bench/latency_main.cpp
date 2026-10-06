@@ -4,16 +4,20 @@
 // EACH individual operation took, as percentiles (p50 ... p99.99, max),
 // plus overall throughput.
 //
-// Usage: ./build/release/lob_latency [--msgs N] [--orders N] [--cpu N] [--seed N]
+// Usage: ./build/release/lob_latency [--msgs N] [--orders N] [--cpu N]
+//                                    [--seed N] [--diagnose 1]
 
 #include <sched.h>
+#include <sys/resource.h>
 
 #include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -25,11 +29,35 @@
 using namespace lob;
 using namespace lob::bench;
 
+// ---------------------------------------------------------------------------
+// Allocation counter. Replacing the global operator new lets us count every
+// time ANY code in this program asks the system for heap memory.
+// ---------------------------------------------------------------------------
 namespace {
+std::uint64_t g_allocations = 0;
+}  // namespace
+
+void* operator new(std::size_t size) {
+  ++g_allocations;
+  if (void* p = std::malloc(size)) return p;
+  throw std::bad_alloc();
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+
+namespace {
+
+// Page faults so far: times the OS had to hand us a fresh page of memory.
+std::uint64_t page_faults() {
+  rusage u{};
+  getrusage(RUSAGE_SELF, &u);
+  return static_cast<std::uint64_t>(u.ru_minflt + u.ru_majflt);
+}
 
 struct Options {
   FlowConfig flow;
   int cpu = 2;  // a P-core, and not core 0 (which handles most interrupts)
+  bool diagnose = false;
 };
 
 Options parse(int argc, char** argv) {
@@ -41,6 +69,7 @@ Options parse(int argc, char** argv) {
     else if (key == "--orders") o.flow.target_orders = v;
     else if (key == "--cpu") o.cpu = static_cast<int>(v);
     else if (key == "--seed") o.flow.seed = static_cast<std::uint32_t>(v);
+    else if (key == "--diagnose") o.diagnose = v != 0;
     else std::fprintf(stderr, "unknown option %s\n", key.c_str());
   }
   return o;
@@ -60,6 +89,20 @@ std::string read_line(const std::string& path) {
   std::string s;
   std::getline(f, s);
   return s.empty() ? "unknown" : s;
+}
+
+// "AC" or "battery": laptops run much slower on battery, so every result
+// must say which one it was measured on.
+std::string power_source() {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  for (const auto& e : fs::directory_iterator("/sys/class/power_supply", ec)) {
+    if (read_line(e.path().string() + "/type") == "Mains") {
+      return read_line(e.path().string() + "/online") == "1" ? "AC"
+                                                             : "battery";
+    }
+  }
+  return "unknown";
 }
 
 // Cost of the stopwatch itself: time "nothing" a million times.
@@ -93,8 +136,9 @@ int main(int argc, char** argv) {
               opt.cpu, pinned ? "yes" : "NO",
               governor.c_str(),
               read_line(cpu_dir + "energy_performance_preference").c_str());
-  std::printf("  TSC: %.3f GHz | timer overhead: %.1f ns (included below)\n",
-              ticks_per_ns, overhead);
+  std::printf("  power: %s | TSC: %.3f GHz | timer overhead: %.1f ns "
+              "(included below)\n",
+              power_source().c_str(), ticks_per_ns, overhead);
   if (governor != "performance") {
     std::printf("  NOTE: governor is not 'performance'; expect noisier "
                 "results.\n");
@@ -147,10 +191,12 @@ int main(int argc, char** argv) {
   std::vector<std::uint64_t> all;
   all.reserve(flow.msgs.size());
   std::size_t trades_b = 0, orders_b = 0;
+  std::uint64_t allocs = 0, faults = 0;
   {
     OrderBook book;
     for (const Msg& m : flow.prefill) apply(book, m);
     book.clear_trades();
+    const std::uint64_t a0 = g_allocations, f0 = page_faults();
     for (const Msg& m : flow.msgs) {
       const std::uint64_t t0 = tsc_start();
       apply(book, m);
@@ -160,6 +206,8 @@ int main(int argc, char** argv) {
       trades_b += book.trades().size();
       book.clear_trades();  // outside the timed region
     }
+    allocs = g_allocations - a0;
+    faults = page_faults() - f0;
     orders_b = book.order_count();
   }
 
@@ -191,5 +239,57 @@ int main(int argc, char** argv) {
   std::printf("\nThroughput: %.2f million messages/second (%.0f ns per "
               "message on average, no stopwatch)\n",
               throughput / 1e6, 1e9 / throughput);
+  std::printf("Heap allocations: %.2f per message | page faults: %llu\n",
+              static_cast<double>(allocs) /
+                  static_cast<double>(flow.msgs.size()),
+              static_cast<unsigned long long>(faults));
+
+  // ---- 6. Diagnosis: what do the SLOW messages have in common? ----------
+  // A third replay. For every message we also record whether it allocated
+  // memory or caused a page fault (getrusage is a system call, so this pass
+  // is only for detective work, not for the headline numbers).
+  if (opt.diagnose) {
+    constexpr double kSlowNs = 1000.0;
+    std::size_t slow = 0, slow_fault = 0, slow_alloc = 0;
+    std::size_t fast_alloc = 0, fast = 0;
+    OrderBook book;
+    for (const Msg& m : flow.prefill) apply(book, m);
+    book.clear_trades();
+    for (const Msg& m : flow.msgs) {
+      const std::uint64_t f0 = page_faults();
+      const std::uint64_t a0 = g_allocations;
+      const std::uint64_t t0 = tsc_start();
+      apply(book, m);
+      const std::uint64_t t1 = tsc_stop();
+      const bool allocated = g_allocations != a0;
+      const bool faulted = page_faults() != f0;
+      book.clear_trades();
+      if (static_cast<double>(t1 - t0) / ticks_per_ns >= kSlowNs) {
+        ++slow;
+        if (faulted) ++slow_fault;
+        else if (allocated) ++slow_alloc;
+      } else {
+        ++fast;
+        if (allocated) ++fast_alloc;
+      }
+    }
+    const auto share = [](std::size_t part, std::size_t whole) {
+      return whole == 0 ? 0.0
+                        : 100.0 * static_cast<double>(part) /
+                              static_cast<double>(whole);
+    };
+    std::printf("\nDiagnosis of messages slower than %.0f ns\n", kSlowNs);
+    std::printf("  slow messages:            %zu (%.3f%% of all)\n", slow,
+                share(slow, flow.msgs.size()));
+    std::printf("  ...with a page fault:     %zu (%.1f%%)\n", slow_fault,
+                share(slow_fault, slow));
+    std::printf("  ...with an allocation:    %zu (%.1f%%)\n", slow_alloc,
+                share(slow_alloc, slow));
+    std::printf("  ...with neither:          %zu (%.1f%%)\n",
+                slow - slow_fault - slow_alloc,
+                share(slow - slow_fault - slow_alloc, slow));
+    std::printf("  (for comparison, fast messages that allocated: %.1f%%)\n",
+                share(fast_alloc, fast));
+  }
   return 0;
 }

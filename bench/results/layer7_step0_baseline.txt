@@ -1,0 +1,29 @@
+Environment
+  pinned to cpu 2: yes | governor: powersave | energy pref: balance_performance
+  power: AC | TSC: 3.110 GHz | timer overhead: 10.9 ns (included below)
+  NOTE: governor is not 'performance'; expect noisier results.
+
+Order flow (seed 42, generated in 0.9 s)
+  10000000 messages: 52.4% add, 42.6% cancel, 2.5% aggressive limit, 2.5% market
+  book starts with 10000 resting orders
+  1475957 trades, 9006 orders resting at the end
+
+Latency per message in nanoseconds
+
+| operation        |      count |  mean |   p50 |   p90 |   p99 | p99.9 | p99.99 |      max |
+|------------------|-----------:|------:|------:|------:|------:|------:|-------:|---------:|
+| add (passive)    |    5243852 |    56 |    53 |    72 |   103 |   156 |   2191 |    96074 |
+| cancel           |    4257426 |    67 |    64 |    80 |   100 |   258 |   2400 |    82974 |
+| aggressive limit |     249458 |    99 |    89 |   158 |   233 |   375 |   2494 |    74420 |
+| market           |     249264 |   101 |    92 |   159 |   235 |   365 |   2618 |    25637 |
+| ALL              |   10000000 |    63 |    58 |    81 |   141 |   251 |   2341 |    96074 |
+
+Throughput: 23.73 million messages/second (42 ns per message on average, no stopwatch)
+Heap allocations: 0.53 per message | page faults: 39026
+
+Diagnosis of messages slower than 1000 ns
+  slow messages:            20273 (0.203% of all)
+  ...with a page fault:     0 (0.0%)
+  ...with an allocation:    3686 (18.2%)
+  ...with neither:          16587 (81.8%)
+  (for comparison, fast messages that allocated: 52.5%)
