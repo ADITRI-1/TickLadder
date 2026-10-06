@@ -1,0 +1,25 @@
+Run by hand with: sudo cpupower frequency-set -g performance; ./build/release/lob_latency --cpu 2
+Engine: Layer 7 step 3/4 (pool + open-addressing index + flat price ladder)
+
+Environment
+  pinned to cpu 2: yes | governor: performance | energy pref: performance
+  power: battery | TSC: 3.110 GHz | timer overhead: 10.9 ns (included below)
+
+Order flow (seed 42, generated in 0.6 s)
+  10000000 messages: 52.4% add, 42.6% cancel, 2.5% aggressive limit, 2.5% market
+  book starts with 10000 resting orders
+  1475957 trades, 9006 orders resting at the end
+
+Latency per message in nanoseconds
+
+| operation        |      count |  mean |   p50 |   p90 |   p99 | p99.9 | p99.99 |      max |
+|------------------|-----------:|------:|------:|------:|------:|------:|-------:|---------:|
+| add (passive)    |    5243852 |    38 |    36 |    44 |    57 |   119 |   2327 |    41929 |
+| cancel           |    4257426 |    44 |    43 |    55 |    64 |   117 |   2312 |    49073 |
+| aggressive limit |     249458 |    62 |    56 |    92 |   137 |   250 |   2433 |    21418 |
+| market           |     249264 |    63 |    55 |    92 |   137 |   225 |   2727 |    25709 |
+| ALL              |   10000000 |    42 |    39 |    53 |    81 |   152 |   2333 |    49073 |
+
+Throughput: 51.40 million messages/second (19 ns per message on average, no stopwatch)
+Heap allocations: 0.00 per message | page faults: 1
+Interrupts on cpu 2 during the timed pass: 592 | messages slower than 1 us: 2128

@@ -1,5 +1,6 @@
 # Layer 7: before/after (median of 5 interleaved runs)
 
+Conditions: AC power, governor powersave.
 CPU: 12th Gen Intel(R) Core(TM) i5-12500H, pinned to one P-core. 10M messages per run, same seed.
 All latencies in ns and include ~11 ns of timer overhead.
 

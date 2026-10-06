@@ -15,7 +15,14 @@ ROOT=$(git rev-parse --show-toplevel)
 WORK="$ROOT/build/compare"
 ROUNDS=${ROUNDS:-5}
 CPU=${CPU:-2}
-OUT="$ROOT/bench/results/layer7_comparison.md"
+# Power source and CPU governor change the numbers a lot, so they are part
+# of the file name: runs under different conditions never overwrite each other.
+POWER=battery
+for s in /sys/class/power_supply/*; do
+  if [[ "$(cat "$s/type" 2>/dev/null)" == "Mains" && "$(cat "$s/online")" == "1" ]]; then POWER=ac; fi
+done
+GOV=$(cat "/sys/devices/system/cpu/cpu$CPU/cpufreq/scaling_governor" 2>/dev/null || echo unknown)
+OUT="$ROOT/bench/results/layer7_comparison_${POWER}_${GOV}.md"
 
 NAMES=("0 baseline (std::map + unordered_map)" "1 + object pool"
        "2 + open-addressing hash map" "3 + flat price ladder")
@@ -52,9 +59,10 @@ for ((r = 0; r < ROUNDS; r++)); do
   done
 done
 
-python3 - "$RAW" "$OUT" "$ROUNDS" "${NAMES[@]}" <<'PY'
+python3 - "$RAW" "$OUT" "$ROUNDS" "$POWER" "$GOV" "${NAMES[@]}" <<'PY'
 import statistics, sys, subprocess
-raw, out, rounds, names = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+raw, out, rounds, power, gov = sys.argv[1:6]
+names = sys.argv[6:]
 lat = {i: [] for i in range(len(names))}
 thr = {i: [] for i in range(len(names))}
 for line in open(raw):
@@ -69,6 +77,7 @@ med = lambda xs: statistics.median(xs)
 env = subprocess.run(["bash", "-c", "grep -m1 'model name' /proc/cpuinfo | cut -d: -f2"],
                      capture_output=True, text=True).stdout.strip()
 lines = [f"# Layer 7: before/after (median of {rounds} interleaved runs)", "",
+         f"Conditions: {'AC' if power == 'ac' else 'battery'} power, governor {gov}.",
          f"CPU: {env}, pinned to one P-core. 10M messages per run, same seed.",
          "All latencies in ns and include ~11 ns of timer overhead.", "",
          "| step | " + " | ".join(cols) + " | throughput (M msg/s) |",
