@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "lob/object_pool.hpp"
 #include "lob/types.hpp"
 
 namespace lob {
@@ -42,6 +43,10 @@ struct LevelInfo {
 // ---------------------------------------------------------------------------
 class OrderBook {
  public:
+  // `expected_orders`: how many orders are usually resting at once. Memory
+  // for that many is reserved up front; more still works, just slower.
+  explicit OrderBook(std::size_t expected_orders = 1 << 16);
+
   // Limit order: "buy/sell up to qty at price or better".
   Status add(OrderId id, Side side, Price price, Quantity qty);
 
@@ -74,6 +79,15 @@ class OrderBook {
   // cross `limit`. Returns the quantity that is still unfilled.
   Quantity match(OrderId id, Side side, Price limit, Quantity qty);
 
+  // The matching loop, written once for both sides. `book_side` is the
+  // OPPOSITE side of the incoming order (a buyer trades against asks).
+  template <typename Map>
+  Quantity match_against(Map& book_side, OrderId id, Side side, Price limit,
+                         Quantity qty);
+
+  // Remove a finished order from the id index and return its memory.
+  void forget(Order* o);
+
   // Put a (remaining) limit order into its price level queue.
   void rest(OrderId id, Side side, Price price, Quantity qty);
 
@@ -85,10 +99,9 @@ class OrderBook {
   BidMap bids_;
   AskMap asks_;
 
-  // Owns every resting order, and finds any of them by id in O(1).
-  // std::unordered_map never moves its elements, so the Order* pointers
-  // held by the price level queues stay valid.
-  std::unordered_map<OrderId, Order> orders_;
+  // Every resting order lives in the pool; the index finds it by id in O(1).
+  ObjectPool<Order> pool_;
+  std::unordered_map<OrderId, Order*> orders_;
 
   std::vector<Trade> trades_;
 };

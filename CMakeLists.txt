@@ -75,6 +75,7 @@ add_executable(lob_tests
   tests/test_edge_cases.cpp
   tests/test_differential.cpp
   tests/test_bench_tools.cpp
+  tests/test_object_pool.cpp
 )
 # The benchmark tools in bench/ are tested too.
 target_include_directories(lob_tests PRIVATE bench)

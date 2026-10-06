@@ -44,12 +44,15 @@ bool crosses(Side side, Price limit, Price level_price) {
   return side == Side::Buy ? level_price <= limit : level_price >= limit;
 }
 
-// The matching loop, written once for both sides. `book_side` is the
-// OPPOSITE side of the incoming order (a buyer trades against asks).
+}  // namespace
+
+OrderBook::OrderBook(std::size_t expected_orders) : pool_(expected_orders) {
+  orders_.reserve(expected_orders);
+}
+
 template <typename Map>
-Quantity match_against(Map& book_side, OrderId id, Side side, Price limit,
-                       Quantity qty, std::unordered_map<OrderId, Order>& orders,
-                       std::vector<Trade>& trades) {
+Quantity OrderBook::match_against(Map& book_side, OrderId id, Side side,
+                                  Price limit, Quantity qty) {
   // Outer loop: best price level first.
   while (qty > 0 && !book_side.empty()) {
     auto level_it = book_side.begin();
@@ -65,16 +68,15 @@ Quantity match_against(Map& book_side, OrderId id, Side side, Price limit,
 
       // Trade at the RESTING order's price: it was there first.
       if (side == Side::Buy) {
-        trades.push_back({id, maker->id, lvl.price, fill});
+        trades_.push_back({id, maker->id, lvl.price, fill});
       } else {
-        trades.push_back({maker->id, id, lvl.price, fill});
+        trades_.push_back({maker->id, id, lvl.price, fill});
       }
       qty -= fill;
 
       if (fill == maker->qty) {
-        const OrderId maker_id = maker->id;
-        lvl.remove(maker);       // fully filled: leaves the queue...
-        orders.erase(maker_id);  // ...and the book (maker is now gone)
+        lvl.remove(maker);  // fully filled: leaves the queue...
+        forget(maker);      // ...and the book (maker is now gone)
       } else {
         lvl.reduce(maker, fill);  // partly filled: keeps its place
       }
@@ -87,7 +89,10 @@ Quantity match_against(Map& book_side, OrderId id, Side side, Price limit,
   return qty;
 }
 
-}  // namespace
+void OrderBook::forget(Order* o) {
+  orders_.erase(o->id);
+  pool_.release(o);
+}
 
 Status OrderBook::add(OrderId id, Side side, Price price, Quantity qty) {
   if (qty == 0) {
@@ -123,13 +128,13 @@ Status OrderBook::market(OrderId id, Side side, Quantity qty) {
 }
 
 Quantity OrderBook::match(OrderId id, Side side, Price limit, Quantity qty) {
-  return side == Side::Buy
-             ? match_against(asks_, id, side, limit, qty, orders_, trades_)
-             : match_against(bids_, id, side, limit, qty, orders_, trades_);
+  return side == Side::Buy ? match_against(asks_, id, side, limit, qty)
+                           : match_against(bids_, id, side, limit, qty);
 }
 
 void OrderBook::rest(OrderId id, Side side, Price price, Quantity qty) {
-  Order& o = orders_[id];
+  Order& o = *pool_.acquire();
+  orders_.emplace(id, &o);
   o.id = id;
   o.side = side;
   o.price = price;
@@ -148,7 +153,7 @@ Status OrderBook::cancel(OrderId id) {
     return Status::UnknownId;
   }
 
-  Order& o = it->second;
+  Order& o = *it->second;
   PriceLevel* lvl = o.level;
   lvl->remove(&o);  // O(1): the order knows its neighbours
 
@@ -162,7 +167,8 @@ Status OrderBook::cancel(OrderId id) {
     }
   }
 
-  orders_.erase(it);  // last step: o is destroyed here, so use it before
+  orders_.erase(it);
+  pool_.release(&o);  // last step: o may be reused from here on
   return Status::Ok;
 }
 
@@ -192,7 +198,7 @@ std::vector<LevelInfo> OrderBook::depth(Side side,
 
 const Order* OrderBook::find(OrderId id) const {
   auto it = orders_.find(id);
-  return it == orders_.end() ? nullptr : &it->second;
+  return it == orders_.end() ? nullptr : it->second;
 }
 
 std::size_t OrderBook::level_count(Side side) const {
