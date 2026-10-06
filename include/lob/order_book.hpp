@@ -33,13 +33,21 @@ struct LevelInfo {
 };
 
 // ---------------------------------------------------------------------------
-// Layer 3: a book that holds resting limit orders. Orders can be added and
-// cancelled, but NOT matched yet (that is Layer 4), so a crossing order
-// (buy price >= best ask) simply rests for now.
+// The limit order book and matching engine.
+//
+// Every incoming order first trades against the opposite side while prices
+// cross (best price first, then oldest order first = price-time priority).
+// Whatever is left of a LIMIT order then rests in the book; whatever is left
+// of a MARKET order is dropped. Every execution is appended to trades().
 // ---------------------------------------------------------------------------
 class OrderBook {
  public:
+  // Limit order: "buy/sell up to qty at price or better".
   Status add(OrderId id, Side side, Price price, Quantity qty);
+
+  // Market order: "buy/sell up to qty right now at any price". Never rests.
+  Status market(OrderId id, Side side, Quantity qty);
+
   Status cancel(OrderId id);
 
   std::optional<Price> best_bid() const;  // highest buy price, if any
@@ -55,9 +63,20 @@ class OrderBook {
   std::size_t order_count() const { return orders_.size(); }
   std::size_t level_count(Side side) const;
 
+  // Receipt book: every trade since the last clear_trades(), oldest first.
+  const std::vector<Trade>& trades() const { return trades_; }
+  void clear_trades() { trades_.clear(); }
+
   friend std::ostream& operator<<(std::ostream& os, const OrderBook& book);
 
  private:
+  // Trade an incoming order against the opposite side for as long as prices
+  // cross `limit`. Returns the quantity that is still unfilled.
+  Quantity match(OrderId id, Side side, Price limit, Quantity qty);
+
+  // Put a (remaining) limit order into its price level queue.
+  void rest(OrderId id, Side side, Price price, Quantity qty);
+
   // Bids: highest price first, so begin() is the best bid.
   // Asks: lowest price first, so begin() is the best ask.
   using BidMap = std::map<Price, PriceLevel, std::greater<>>;
@@ -70,6 +89,8 @@ class OrderBook {
   // std::unordered_map never moves its elements, so the Order* pointers
   // held by the price level queues stay valid.
   std::unordered_map<OrderId, Order> orders_;
+
+  std::vector<Trade> trades_;
 };
 
 std::ostream& operator<<(std::ostream& os, Status s);

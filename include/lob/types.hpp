@@ -84,6 +84,15 @@ struct PriceLevel {
     o->prev = o->next = nullptr;  // no dangling links
     o->level = nullptr;
   }
+
+  // Partial fill: the order trades part of its quantity but stays in the
+  // queue, KEEPING its place in line. O(1).
+  void reduce(Order* o, Quantity filled) noexcept {
+    assert(o->level == this && "order is not in this queue");
+    assert(filled < o->qty && "use remove() for a full fill");
+    o->qty -= filled;
+    total_qty -= filled;
+  }
 };
 
 // ---------------------------------------------------------------------------

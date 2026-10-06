@@ -1,5 +1,7 @@
 #include "lob/order_book.hpp"
 
+#include <algorithm>
+#include <limits>
 #include <ostream>
 
 namespace lob {
@@ -35,6 +37,56 @@ std::uint64_t volume_in(const Map& side, Price price) {
   return it == side.end() ? 0 : it->second.total_qty;
 }
 
+// Does a resting order at `level_price` cross an incoming order on `side`
+// with limit `limit`? A buyer accepts asks at or BELOW its limit; a seller
+// accepts bids at or ABOVE its limit.
+bool crosses(Side side, Price limit, Price level_price) {
+  return side == Side::Buy ? level_price <= limit : level_price >= limit;
+}
+
+// The matching loop, written once for both sides. `book_side` is the
+// OPPOSITE side of the incoming order (a buyer trades against asks).
+template <typename Map>
+Quantity match_against(Map& book_side, OrderId id, Side side, Price limit,
+                       Quantity qty, std::unordered_map<OrderId, Order>& orders,
+                       std::vector<Trade>& trades) {
+  // Outer loop: best price level first.
+  while (qty > 0 && !book_side.empty()) {
+    auto level_it = book_side.begin();
+    PriceLevel& lvl = level_it->second;
+    if (!crosses(side, limit, lvl.price)) {
+      break;  // best remaining price is too expensive: stop
+    }
+
+    // Inner loop: oldest order at this price first.
+    while (qty > 0 && !lvl.empty()) {
+      Order* maker = lvl.head;
+      const Quantity fill = std::min(qty, maker->qty);
+
+      // Trade at the RESTING order's price: it was there first.
+      if (side == Side::Buy) {
+        trades.push_back({id, maker->id, lvl.price, fill});
+      } else {
+        trades.push_back({maker->id, id, lvl.price, fill});
+      }
+      qty -= fill;
+
+      if (fill == maker->qty) {
+        const OrderId maker_id = maker->id;
+        lvl.remove(maker);       // fully filled: leaves the queue...
+        orders.erase(maker_id);  // ...and the book (maker is now gone)
+      } else {
+        lvl.reduce(maker, fill);  // partly filled: keeps its place
+      }
+    }
+
+    if (lvl.empty()) {
+      book_side.erase(level_it);  // no one left at this price
+    }
+  }
+  return qty;
+}
+
 }  // namespace
 
 Status OrderBook::add(OrderId id, Side side, Price price, Quantity qty) {
@@ -44,14 +96,40 @@ Status OrderBook::add(OrderId id, Side side, Price price, Quantity qty) {
   if (price <= 0) {
     return Status::InvalidPrice;
   }
-
-  // try_emplace inserts only if the id is new, in a single hash lookup.
-  auto [it, inserted] = orders_.try_emplace(id);
-  if (!inserted) {
+  if (orders_.contains(id)) {
     return Status::DuplicateId;
   }
 
-  Order& o = it->second;
+  const Quantity left = match(id, side, price, qty);
+  if (left > 0) {
+    rest(id, side, price, left);  // the unfilled part waits in the book
+  }
+  return Status::Ok;
+}
+
+Status OrderBook::market(OrderId id, Side side, Quantity qty) {
+  if (qty == 0) {
+    return Status::InvalidQuantity;
+  }
+  if (orders_.contains(id)) {
+    return Status::DuplicateId;
+  }
+
+  // "Any price": a buyer accepts up to +infinity, a seller down to -infinity.
+  const Price any = side == Side::Buy ? std::numeric_limits<Price>::max()
+                                      : std::numeric_limits<Price>::min();
+  match(id, side, any, qty);  // whatever is left is simply dropped
+  return Status::Ok;
+}
+
+Quantity OrderBook::match(OrderId id, Side side, Price limit, Quantity qty) {
+  return side == Side::Buy
+             ? match_against(asks_, id, side, limit, qty, orders_, trades_)
+             : match_against(bids_, id, side, limit, qty, orders_, trades_);
+}
+
+void OrderBook::rest(OrderId id, Side side, Price price, Quantity qty) {
+  Order& o = orders_[id];
   o.id = id;
   o.side = side;
   o.price = price;
@@ -62,7 +140,6 @@ Status OrderBook::add(OrderId id, Side side, Price price, Quantity qty) {
   } else {
     level_for(asks_, price).push_back(&o);
   }
-  return Status::Ok;
 }
 
 Status OrderBook::cancel(OrderId id) {

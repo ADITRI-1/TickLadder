@@ -109,6 +109,19 @@ TEST(PriceLevel, CanRejoinAfterRemove) {
   EXPECT_EQ(str(lvl), "Level{price=0, total=30, count=2, queue=[2 -> 1]}");
 }
 
+TEST(PriceLevel, ReduceKeepsPlaceInLine) {
+  PriceLevel lvl;
+  Order a = make(1, 10), b = make(2, 20);
+  lvl.push_back(&a);
+  lvl.push_back(&b);
+  lvl.reduce(&a, 4);  // a trades 4 of its 10
+
+  EXPECT_EQ(a.qty, 6u);
+  EXPECT_EQ(lvl.total_qty, 26u);
+  EXPECT_EQ(lvl.head, &a);  // still first in line
+  EXPECT_EQ(lvl.count, 2u);
+}
+
 TEST(Printing, OrderAndTrade) {
   Order o = make(7, 5);
   o.side = Side::Sell;
