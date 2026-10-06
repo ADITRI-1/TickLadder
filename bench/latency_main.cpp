@@ -17,6 +17,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <new>
 #include <string>
 #include <vector>
@@ -89,6 +90,25 @@ std::string read_line(const std::string& path) {
   std::string s;
   std::getline(f, s);
   return s.empty() ? "unknown" : s;
+}
+
+// Total interrupts delivered to one CPU so far, summed over every row of
+// /proc/interrupts (timer ticks, network, disk, other cores poking us...).
+std::uint64_t interrupts_on(int cpu) {
+  std::ifstream f("/proc/interrupts");
+  std::string line;
+  std::getline(f, line);  // header: CPU0 CPU1 ...
+  std::uint64_t total = 0;
+  while (std::getline(f, line)) {
+    std::istringstream row(line);
+    std::string label;
+    row >> label;  // e.g. "LOC:"
+    std::uint64_t count = 0;
+    for (int c = 0; c <= cpu && (row >> count); ++c) {
+    }
+    if (row) total += count;
+  }
+  return total;
 }
 
 // "AC" or "battery": laptops run much slower on battery, so every result
@@ -198,12 +218,13 @@ int main(int argc, char** argv) {
   std::array<std::size_t, 4> n_type{};
   std::size_t n_all = 0;
   std::size_t trades_b = 0, orders_b = 0;
-  std::uint64_t allocs = 0, faults = 0;
+  std::uint64_t allocs = 0, faults = 0, irqs = 0;
   {
     OrderBook book;
     for (const Msg& m : flow.prefill) apply(book, m);
     book.clear_trades();
     const std::uint64_t a0 = g_allocations, f0 = page_faults();
+    const std::uint64_t irq0 = interrupts_on(opt.cpu);
     for (const Msg& m : flow.msgs) {
       const std::uint64_t t0 = tsc_start();
       apply(book, m);
@@ -214,6 +235,7 @@ int main(int argc, char** argv) {
       trades_b += book.trades().size();
       book.clear_trades();  // outside the timed region
     }
+    irqs = interrupts_on(opt.cpu) - irq0;
     allocs = g_allocations - a0;
     faults = page_faults() - f0;
     orders_b = book.order_count();
@@ -251,6 +273,14 @@ int main(int argc, char** argv) {
               static_cast<double>(allocs) /
                   static_cast<double>(flow.msgs.size()),
               static_cast<unsigned long long>(faults));
+  std::size_t over_1us = 0;
+  const auto one_us = static_cast<std::uint64_t>(1000.0 * ticks_per_ns);
+  for (std::uint64_t t : all) {
+    if (t >= one_us) ++over_1us;
+  }
+  std::printf("Interrupts on cpu %d during the timed pass: %llu | messages "
+              "slower than 1 us: %zu\n",
+              opt.cpu, static_cast<unsigned long long>(irqs), over_1us);
 
   // ---- 6. Diagnosis: what do the SLOW messages have in common? ----------
   // A third replay. For every message we also record whether it allocated
