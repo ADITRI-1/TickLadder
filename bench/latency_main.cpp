@@ -186,10 +186,17 @@ int main(int argc, char** argv) {
   }
 
   // ---- 4. Latency pass: stopwatch around EVERY single message ------------
+  // The result arrays are sized AND written before timing starts. reserve()
+  // alone would only promise the memory; the OS would then hand it over
+  // page by page (a page fault every 512 results) in the middle of the run.
+  // Filled with 1, not 0: the compiler may turn "allocate + fill with zeros"
+  // into calloc(), which skips the writes because fresh OS memory is
+  // already zero, and then the pages are still untouched.
   std::array<std::vector<std::uint64_t>, 4> lat;
-  for (std::size_t i = 0; i < 4; ++i) lat[i].reserve(mix[i]);
-  std::vector<std::uint64_t> all;
-  all.reserve(flow.msgs.size());
+  for (std::size_t i = 0; i < 4; ++i) lat[i].assign(mix[i], 1);
+  std::vector<std::uint64_t> all(flow.msgs.size(), 1);
+  std::array<std::size_t, 4> n_type{};
+  std::size_t n_all = 0;
   std::size_t trades_b = 0, orders_b = 0;
   std::uint64_t allocs = 0, faults = 0;
   {
@@ -201,8 +208,9 @@ int main(int argc, char** argv) {
       const std::uint64_t t0 = tsc_start();
       apply(book, m);
       const std::uint64_t t1 = tsc_stop();
-      lat[static_cast<std::size_t>(m.type)].push_back(t1 - t0);
-      all.push_back(t1 - t0);
+      const auto type = static_cast<std::size_t>(m.type);
+      lat[type][n_type[type]++] = t1 - t0;
+      all[n_all++] = t1 - t0;
       trades_b += book.trades().size();
       book.clear_trades();  // outside the timed region
     }

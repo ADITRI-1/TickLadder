@@ -6,10 +6,10 @@
 #include <iosfwd>
 #include <map>
 #include <optional>
-#include <unordered_map>
 #include <vector>
 
 #include "lob/object_pool.hpp"
+#include "lob/order_index.hpp"
 #include "lob/types.hpp"
 
 namespace lob {
@@ -101,7 +101,7 @@ class OrderBook {
 
   // Every resting order lives in the pool; the index finds it by id in O(1).
   ObjectPool<Order> pool_;
-  std::unordered_map<OrderId, Order*> orders_;
+  OrderIndex orders_;
 
   std::vector<Trade> trades_;
 };

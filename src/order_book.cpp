@@ -46,9 +46,8 @@ bool crosses(Side side, Price limit, Price level_price) {
 
 }  // namespace
 
-OrderBook::OrderBook(std::size_t expected_orders) : pool_(expected_orders) {
-  orders_.reserve(expected_orders);
-}
+OrderBook::OrderBook(std::size_t expected_orders)
+    : pool_(expected_orders), orders_(expected_orders) {}
 
 template <typename Map>
 Quantity OrderBook::match_against(Map& book_side, OrderId id, Side side,
@@ -134,7 +133,7 @@ Quantity OrderBook::match(OrderId id, Side side, Price limit, Quantity qty) {
 
 void OrderBook::rest(OrderId id, Side side, Price price, Quantity qty) {
   Order& o = *pool_.acquire();
-  orders_.emplace(id, &o);
+  orders_.insert(id, &o);
   o.id = id;
   o.side = side;
   o.price = price;
@@ -148,12 +147,12 @@ void OrderBook::rest(OrderId id, Side side, Price price, Quantity qty) {
 }
 
 Status OrderBook::cancel(OrderId id) {
-  auto it = orders_.find(id);  // O(1): no searching through queues
-  if (it == orders_.end()) {
+  Order* found = orders_.find(id);  // O(1): no searching through queues
+  if (found == nullptr) {
     return Status::UnknownId;
   }
 
-  Order& o = *it->second;
+  Order& o = *found;
   PriceLevel* lvl = o.level;
   lvl->remove(&o);  // O(1): the order knows its neighbours
 
@@ -167,7 +166,7 @@ Status OrderBook::cancel(OrderId id) {
     }
   }
 
-  orders_.erase(it);
+  orders_.erase(id);
   pool_.release(&o);  // last step: o may be reused from here on
   return Status::Ok;
 }
@@ -197,8 +196,7 @@ std::vector<LevelInfo> OrderBook::depth(Side side,
 }
 
 const Order* OrderBook::find(OrderId id) const {
-  auto it = orders_.find(id);
-  return it == orders_.end() ? nullptr : it->second;
+  return orders_.find(id);
 }
 
 std::size_t OrderBook::level_count(Side side) const {
