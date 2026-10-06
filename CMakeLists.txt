@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------
-# Limit Order Book matching engine - top-level build file
+# TickLadder: limit order book matching engine - top-level build file
 # ---------------------------------------------------------------------------
 cmake_minimum_required(VERSION 3.20)
-project(lob VERSION 0.1.0 LANGUAGES CXX)
+project(tickladder VERSION 0.1.0 LANGUAGES CXX)
 
 # --- Language standard -----------------------------------------------------
 # C++20, and fail loudly if the compiler can't do it (no silent fallback).

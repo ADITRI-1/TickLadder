@@ -1,8 +1,15 @@
-# Limit Order Book Matching Engine (C++20)
+# TickLadder
+
+**A C++20 limit order book matching engine: 51M msgs/sec, p99 81 ns.**
 
 A single-threaded, single-instrument limit order book and matching engine,
 built for low and predictable latency, and verified for correctness with
 differential testing against a reference implementation.
+
+*Why the name:* each side of the book is a **ladder with one rung per price
+tick**, a flat array indexed by price plus a bitmap of non-empty rungs.
+That structure is what makes level lookup O(1) (see
+[Architecture](#architecture)).
 
 **Measured on one core of an Intel i5-12500H laptop** (pinned P-core,
 `performance` governor, 10 million realistic messages, timer overhead of
