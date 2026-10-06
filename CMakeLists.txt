@@ -59,7 +59,7 @@ FetchContent_MakeAvailable(googletest benchmark)
 # All engine code goes in one library. Tests and benchmarks link to it, so
 # they exercise exactly the same compiled code.
 add_library(lob
-  src/version.cpp
+  src/types.cpp
 )
 target_include_directories(lob PUBLIC include)
 target_link_libraries(lob PUBLIC lob_options)
@@ -68,6 +68,7 @@ target_link_libraries(lob PUBLIC lob_options)
 enable_testing()
 add_executable(lob_tests
   tests/test_sanity.cpp
+  tests/test_types.cpp
 )
 target_link_libraries(lob_tests PRIVATE lob GTest::gtest_main)
 include(GoogleTest)

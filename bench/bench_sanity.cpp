@@ -1,11 +1,20 @@
 #include <benchmark/benchmark.h>
 
-#include "lob/version.hpp"
+#include "lob/types.hpp"
 
-// Smallest possible benchmark: proves Google Benchmark builds and runs.
-static void BM_Version(benchmark::State& state) {
+// Cost of joining and leaving a price level queue: should be a few ns.
+static void BM_PushRemove(benchmark::State& state) {
+  lob::PriceLevel lvl;
+  lob::Order resting;
+  resting.qty = 10;
+  lvl.push_back(&resting);  // queue is not empty, like a real level
+
+  lob::Order o;
+  o.qty = 5;
   for (auto _ : state) {
-    benchmark::DoNotOptimize(lob::version());
+    lvl.push_back(&o);
+    lvl.remove(&o);
+    benchmark::DoNotOptimize(lvl);
   }
 }
-BENCHMARK(BM_Version);
+BENCHMARK(BM_PushRemove);
